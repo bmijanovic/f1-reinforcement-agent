@@ -1,19 +1,12 @@
-import cv2
 import gymnasium as gym
 import math
 import random
-import matplotlib
-import matplotlib.pyplot as plt
 from collections import namedtuple, deque
 from itertools import count
-
-import numpy as np
+import pickle
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import torch.nn.functional as F
-from PIL import Image
-from torchvision.transforms import transforms
 
 Transition = namedtuple('Transition', ('state', 'action', 'next_state', 'reward'))
 
@@ -32,6 +25,20 @@ class ReplayMemory(object):
 
     def __len__(self):
         return len(self.memory)
+
+    def save(self, file_path):
+        """Save the replay memory to disk"""
+        with open(file_path, 'wb') as file:
+            pickle.dump(self.memory, file)
+
+    @classmethod
+    def load(cls, file_path, capacity):
+        """Load a replay memory from disk"""
+        replay_memory = cls(capacity)
+        with open(file_path, 'rb') as file:
+            replay_memory.memory = pickle.load(file)
+        return replay_memory
+
 
 
 class DQN(nn.Module):
@@ -76,7 +83,7 @@ def select_action(state):
     sample = random.random()
     eps_threshold = EPS_END + (EPS_START - EPS_END) * math.exp(-1. * steps_done / EPS_DECAY)
     steps_done += 1
-    if sample > eps_threshold:
+    if sample > 0:
         with torch.no_grad():
             nesto = policy_net(state)
             max_value, max_index = torch.max(nesto.view(5), dim=0)
@@ -116,11 +123,12 @@ def optimize_model():
     optimizer.step()
 
 
-def process_state_image(state):
-    transform = transforms.Grayscale()
-    monochrome_tensor = transform(state.permute(2, 0, 1)).squeeze()
-    # monochrome_tensor /= 255
-    return monochrome_tensor
+#
+# def process_state_image(state):
+#     transform = transforms.Grayscale()
+#     monochrome_tensor = transform(state.permute(2, 0, 1)).squeeze()
+#     # monochrome_tensor /= 255
+#     return monochrome_tensor
 
 
 BATCH_SIZE = 64
@@ -134,26 +142,31 @@ LR = 1e-4
 env = gym.make("CarRacing-v2", domain_randomize=False, render_mode="human", continuous=False)
 # env = gym.make("CartPole-v1")
 
-plt.ion()
 
 n_actions = env.action_space.n
 state, info = env.reset()
 state = torch.tensor(state, dtype=torch.float32).unsqueeze(0).view(96, 96, 3)
 state = state.permute(2, 0, 1)
 
+# Save the memory to disk
+
+# Load the memory from disk
+
 try:
     policy_net = DQN(state.shape, n_actions)
     target_net = DQN(state.shape, n_actions)
     policy_net.load("policynet.pt")
     policy_net.load("targetnet.pt")
+    memory = ReplayMemory.load('replay_memory.pkl', capacity=10000)
 except:
     policy_net = DQN(state.shape, n_actions)
     target_net = DQN(state.shape, n_actions)
+    memory = ReplayMemory(10000)
 
-target_net.load_state_dict(policy_net.state_dict())
+# memory = ReplayMemory(10000)
+# target_net.load_state_dict(policy_net.state_dict())
 
 optimizer = optim.AdamW(policy_net.parameters(), lr=LR, amsgrad=True)
-memory = ReplayMemory(10000)
 
 steps_done = 0
 
@@ -169,14 +182,15 @@ try:
         time_frame_counter = 1
         for t in count():
             action = select_action(state)
-            observation, reward, terminated, truncated, _ = env.step(action.item())
+            try:
+                observation, reward, terminated, truncated, _ = env.step(action.item())
+            except:
+                env.reset()
+
             reward = torch.tensor([reward])
             done = terminated or truncated
 
             negative_reward_counter = negative_reward_counter + 1 if time_frame_counter > 100 and reward < 0 else 0
-
-            if action.item() == 3:
-                reward += 0.5
 
             if action.item() == 0:
                 reward -= 0.5
@@ -191,7 +205,8 @@ try:
 
             state = next_state
 
-            optimize_model()
+            if time_frame_counter % 20 == 0:
+                optimize_model()
             time_frame_counter += 1
             target_net_state_dict = target_net.state_dict()
             policy_net_state_dict = policy_net.state_dict()
@@ -200,11 +215,19 @@ try:
             target_net.load_state_dict(target_net_state_dict)
             if done:
                 episode_durations.append(t + 1)
+                target_net.save("targetnet.pt")
+                policy_net.save("policynet.pt")
+                memory.save('replay_memory.pkl')
+                print("sacuvao")
                 break
 except:
     target_net.save("targetnet.pt")
     policy_net.save("policynet.pt")
+    memory.save('replay_memory.pkl')
+    print("sacuvao")
+    env.reset()
 
-plt.show()
 target_net.save("targetnet.pt")
 policy_net.save("policynet.pt")
+memory.save('replay_memory.pkl')
+print("kraj")
