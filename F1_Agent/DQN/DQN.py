@@ -7,6 +7,7 @@ import pickle
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from matplotlib import pyplot as plt
 
 Transition = namedtuple('Transition', ('state', 'action', 'next_state', 'reward'))
 
@@ -83,7 +84,7 @@ def select_action(state):
     sample = random.random()
     eps_threshold = EPS_END + (EPS_START - EPS_END) * math.exp(-1. * steps_done / EPS_DECAY)
     steps_done += 1
-    if sample > 0:
+    if sample > eps_threshold:
         with torch.no_grad():
             nesto = policy_net(state)
             max_value, max_index = torch.max(nesto.view(5), dim=0)
@@ -157,12 +158,16 @@ try:
     target_net = DQN(state.shape, n_actions)
     policy_net.load("policynet.pt")
     policy_net.load("targetnet.pt")
-    memory = ReplayMemory.load('replay_memory.pkl', capacity=10000)
 except:
     policy_net = DQN(state.shape, n_actions)
     target_net = DQN(state.shape, n_actions)
+
+try:
+    memory = ReplayMemory.load('replay_memory.pkl', capacity=10000)
+except:
     memory = ReplayMemory(10000)
 
+    
 # memory = ReplayMemory(10000)
 # target_net.load_state_dict(policy_net.state_dict())
 
@@ -170,11 +175,13 @@ optimizer = optim.AdamW(policy_net.parameters(), lr=LR, amsgrad=True)
 
 steps_done = 0
 
-num_episodes = 600
+num_episodes = 200
 episode_durations = []
-
+rewards = []
+all_rewards = []
 try:
     for i_episode in range(num_episodes):
+        print("episode: " + str(i_episode))
         state, info = env.reset()
         state = torch.tensor(state, dtype=torch.float32)
         state = state.permute(2, 0, 1).unsqueeze(0)
@@ -195,6 +202,7 @@ try:
             if action.item() == 0:
                 reward -= 0.5
 
+            rewards.append(reward.item())
             if terminated:
                 next_state = None
             else:
@@ -214,6 +222,8 @@ try:
                 target_net_state_dict[key] = policy_net_state_dict[key] * TAU + target_net_state_dict[key] * (1 - TAU)
             target_net.load_state_dict(target_net_state_dict)
             if done:
+                all_rewards.append(sum(rewards))
+                rewards = []
                 episode_durations.append(t + 1)
                 target_net.save("targetnet.pt")
                 policy_net.save("policynet.pt")
@@ -231,3 +241,9 @@ target_net.save("targetnet.pt")
 policy_net.save("policynet.pt")
 memory.save('replay_memory.pkl')
 print("kraj")
+
+plt.title('Training...')
+plt.xlabel('Episode')
+plt.ylabel('Reward')
+plt.plot(all_rewards)
+plt.show()
